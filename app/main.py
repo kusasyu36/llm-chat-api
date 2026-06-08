@@ -74,7 +74,13 @@ def chat(req: ChatRequest, db: Session = Depends(get_session)) -> ChatResponse:
     backend = app.state.backend
 
     start = time.perf_counter()
-    answer = backend.generate(req.message)
+    try:
+        answer = backend.generate(req.message)
+    except Exception as exc:
+        # LLM バックエンドが落ちた/混んでいる時は 503 を返す。
+        # 利用者側で「少し待って再試行」のフォールバックを取れるようにする。
+        log.error("backend_failed", backend=backend.name, error=str(exc), exc_info=exc)
+        raise HTTPException(status_code=503, detail="LLMバックエンドが一時的に利用できません") from exc
     latency_s = time.perf_counter() - start
     latency_ms = int(latency_s * 1000)
 
