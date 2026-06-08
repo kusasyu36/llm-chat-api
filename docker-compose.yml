@@ -1,0 +1,28 @@
+# API と Prometheus を一括起動する。
+#   docker compose up --build
+# API のメトリクスを Prometheus が定期取得し、http://localhost:9090 で確認できる。
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      CHAT_BACKEND: echo
+      CHAT_DATABASE_URL: sqlite:////data/chat.db
+    volumes:
+      - chat-data:/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  chat-data:

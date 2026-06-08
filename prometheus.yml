@@ -1,0 +1,8 @@
+# Prometheus の設定。api コンテナの /metrics を15秒ごとに取りに行く（pull型）。
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: llm-chat-api
+    static_configs:
+      - targets: ["api:8000"]
