@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import Depends, FastAPI, Query
-from fastapi.responses import PlainTextResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.backends import make_backend
 from app.config import get_settings
 from app.db import ChatLog, get_session, init_db
+from app.logging_config import configure_logging
 from app.metrics import CHAT_LATENCY, CHAT_REQUESTS
 from app.schemas import ChatRequest, ChatResponse, HistoryItem
 
@@ -29,7 +31,8 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 起動時: テーブル作成 + バックエンド初期化（重いモデルは1回だけ読む）。
+    # 起動時: ログ設定 → テーブル作成 → バックエンド初期化（重いモデルは1回だけ読む）。
+    configure_logging()
     init_db()
     settings = get_settings()
     app.state.backend = make_backend(settings)
@@ -39,6 +42,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="llm-chat-api", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    # リクエストごとに固有IDを振り、以降のログ全部に自動で付ける。
+    # 障害調査時に「このリクエストで何が起きたか」を一本の糸で追える。
+    request_id = str(uuid.uuid4())
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=request_id, path=request.url.path)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # 想定外の例外を握りつぶさずログに残し、利用者には安全な500を返す
+    # （スタックトレースなど内部情報を漏らさない）。
+    log.error("unhandled_exception", error=str(exc), exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "内部エラーが発生しました"})
 
 
 @app.get("/healthz")
